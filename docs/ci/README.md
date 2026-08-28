@@ -90,3 +90,9 @@ pnpm test:architecture
 pnpm test
 pnpm build
 ```
+
+---
+
+## 8. Line Ending Policy
+
+WAFLOW canonical repository text line endings are LF (`\n`). This is enforced repository-wide across Windows and Linux environments via [`.gitattributes`](../../.gitattributes) and Prettier (`endOfLine: 'lf'`).
