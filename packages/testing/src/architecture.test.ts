@@ -1,5 +1,6 @@
+import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { analyzeArchitecture } from './architecture/analyzer.js';
+import { analyzeArchitecture, isPathInside } from './architecture/analyzer.js';
 import type { WorkspaceMeta } from './architecture/types.js';
 
 function createMockWorkspace(
@@ -16,7 +17,7 @@ function createMockWorkspace(
   } = {},
 ): { meta: WorkspaceMeta; files: { filePath: string; content: string }[] } {
   const dirName = name.replace('@waflow/', '');
-  const absolutePath = `C:/mock/waflow/${kind === 'app' ? 'apps' : 'packages'}/${dirName}`;
+  const absolutePath = path.resolve('/mock/waflow', kind === 'app' ? 'apps' : 'packages', dirName);
 
   const meta: WorkspaceMeta = {
     name,
@@ -38,13 +39,84 @@ function createMockWorkspace(
   const importLines = (options.sourceImports ?? []).map((imp) => `import '${imp}';`).join('\n');
   const files = [
     {
-      filePath: `${absolutePath}/src/index.ts`,
+      filePath: path.resolve(absolutePath, 'src', 'index.ts'),
       content: `export const NAME = '${name}';\n${importLines}`,
     },
   ];
 
   return { meta, files };
 }
+
+describe('isPathInside — Path-aware containment utility', () => {
+  it('POSIX: should correctly identify files inside a directory', () => {
+    expect(isPathInside('/repo/packages/foo', '/repo/packages/foo/src/index.ts', path.posix)).toBe(
+      true,
+    );
+    expect(isPathInside('/repo/packages/foo', '/repo/packages/foo', path.posix)).toBe(true);
+    expect(isPathInside('/repo/packages/foo/', '/repo/packages/foo', path.posix)).toBe(true);
+    expect(isPathInside('/repo/packages/foo', '/repo/packages/foo/.env', path.posix)).toBe(true);
+    expect(
+      isPathInside('/repo/packages/foo', '/repo/packages/foo/nested/deep/file.ts', path.posix),
+    ).toBe(true);
+  });
+
+  it('POSIX: should reject files outside, escaping, or in similarly-prefixed directories', () => {
+    // Sibling directory with similar prefix (MUST NOT be confused by startsWith)
+    expect(
+      isPathInside('/repo/packages/foo', '/repo/packages/foobar/src/index.ts', path.posix),
+    ).toBe(false);
+    // Sibling directory
+    expect(isPathInside('/repo/packages/foo', '/repo/packages/bar/src/index.ts', path.posix)).toBe(
+      false,
+    );
+    // Parent directory
+    expect(isPathInside('/repo/packages/foo', '/repo/packages', path.posix)).toBe(false);
+    // Escaping relative path
+    expect(isPathInside('/repo/packages/foo', '/repo/packages/foo/../../other', path.posix)).toBe(
+      false,
+    );
+  });
+
+  it('Windows: should correctly identify files inside a directory', () => {
+    expect(
+      isPathInside('C:\\repo\\packages\\foo', 'C:\\repo\\packages\\foo\\src\\index.ts', path.win32),
+    ).toBe(true);
+    expect(isPathInside('C:\\repo\\packages\\foo', 'C:\\repo\\packages\\foo', path.win32)).toBe(
+      true,
+    );
+    expect(
+      isPathInside('C:/repo/packages/foo', 'C:\\repo\\packages\\foo\\src\\index.ts', path.win32),
+    ).toBe(true);
+  });
+
+  it('Windows: should reject files outside, escaping, cross-drive, or similarly-prefixed directories', () => {
+    // Similarly-prefixed sibling
+    expect(
+      isPathInside(
+        'C:\\repo\\packages\\foo',
+        'C:\\repo\\packages\\foobar\\src\\index.ts',
+        path.win32,
+      ),
+    ).toBe(false);
+    // Cross-drive path
+    expect(
+      isPathInside('C:\\repo\\packages\\foo', 'D:\\repo\\packages\\foo\\src\\index.ts', path.win32),
+    ).toBe(false);
+    // Escaping path
+    expect(
+      isPathInside('C:\\repo\\packages\\foo', 'C:\\repo\\packages\\foo\\..\\..\\other', path.win32),
+    ).toBe(false);
+  });
+
+  it('Host OS: should validate containment on the current host platform', () => {
+    const currentRoot = path.resolve(process.cwd(), 'mock-root');
+    const childFile = path.resolve(currentRoot, 'src', 'file.ts');
+    const siblingFile = path.resolve(process.cwd(), 'mock-root-sibling', 'file.ts');
+
+    expect(isPathInside(currentRoot, childFile)).toBe(true);
+    expect(isPathInside(currentRoot, siblingFile)).toBe(false);
+  });
+});
 
 describe('Architecture Test Engine — Boundary Enforcement', () => {
   it('Scenario 1: should detect forbidden domain dependency (ARCH-003 / ARCH-006)', () => {
@@ -142,7 +214,7 @@ describe('Architecture Test Engine — Boundary Enforcement', () => {
     const dbWs = createMockWorkspace('@waflow/database', 'package');
 
     const escapingFile = {
-      filePath: `${dbWs.meta.absolutePath}/src/repository.ts`,
+      filePath: path.resolve(dbWs.meta.absolutePath, 'src', 'repository.ts'),
       content: `import '../../domain/src/index.js';`,
     };
 
@@ -302,15 +374,16 @@ describe('Architecture Test Engine — Boundary Enforcement', () => {
 
   it('Scenario C: should allow test source importing workspace dependency declared in devDependencies (VALID)', () => {
     const testingPkg = createMockWorkspace('@waflow/testing', 'package');
+    const domainPkgPath = path.resolve('/mock/waflow', 'packages', 'domain');
     const domainPkg = createMockWorkspace('@waflow/domain', 'package', {
       devDependencies: { '@waflow/testing': 'workspace:*' },
       customFiles: [
         {
-          filePath: `C:/mock/waflow/packages/domain/src/index.ts`,
+          filePath: path.resolve(domainPkgPath, 'src', 'index.ts'),
           content: `export const DOMAIN = true;`,
         },
         {
-          filePath: `C:/mock/waflow/packages/domain/src/domain.test.ts`,
+          filePath: path.resolve(domainPkgPath, 'src', 'domain.test.ts'),
           content: `import '@waflow/testing';`,
         },
       ],
@@ -429,5 +502,112 @@ describe('Architecture Test Engine — Boundary Enforcement', () => {
     const cycleViolations = result.violations.filter((v) => v.ruleId === 'ARCH-009');
     expect(cycleViolations.length).toBeGreaterThanOrEqual(1);
     expect(cycleViolations[0]?.reason).toContain('Circular dependency detected');
+  });
+
+  // CROSS-PLATFORM SELF-TEST EXTENSIONS (Section 7)
+
+  it('Scenario I: should allow relative imports that remain inside their own workspace (VALID)', () => {
+    const domainWs = createMockWorkspace('@waflow/domain', 'package');
+    const internalFiles = [
+      {
+        filePath: path.resolve(domainWs.meta.absolutePath, 'src', 'index.ts'),
+        content: `import './models/user.js';\nimport '../src/helpers/util.js';`,
+      },
+      {
+        filePath: path.resolve(domainWs.meta.absolutePath, 'src', 'models', 'user.ts'),
+        content: `import '../helpers/util.js';\nexport const USER = 'user';`,
+      },
+      {
+        filePath: path.resolve(domainWs.meta.absolutePath, 'src', 'helpers', 'util.ts'),
+        content: `export const UTIL = 'util';`,
+      },
+    ];
+
+    const workspaces = [domainWs.meta];
+    const customFiles = new Map([[domainWs.meta.name, internalFiles]]);
+
+    const result = analyzeArchitecture({ workspaces, customFiles });
+    expect(result.success).toBe(true);
+    expect(result.violations).toHaveLength(0);
+  });
+
+  it('Scenario J: should not confuse similarly-prefixed workspace directories when checking escapes (ARCH-008)', () => {
+    const coreWs = createMockWorkspace('@waflow/core', 'package');
+    const coreExtraWs = createMockWorkspace('@waflow/core-extra', 'package');
+
+    // Escaping import into similarly-named sibling workspace
+    const escapingFile = {
+      filePath: path.resolve(coreWs.meta.absolutePath, 'src', 'index.ts'),
+      content: `import '../../core-extra/src/index.js';`,
+    };
+
+    const workspaces = [coreWs.meta, coreExtraWs.meta];
+    const customFiles = new Map([
+      [coreWs.meta.name, [escapingFile]],
+      [coreExtraWs.meta.name, coreExtraWs.files],
+    ]);
+
+    const result = analyzeArchitecture({ workspaces, customFiles });
+    expect(result.success).toBe(false);
+
+    const escapeViolations = result.violations.filter((v) => v.ruleId === 'ARCH-008');
+    expect(escapeViolations.length).toBeGreaterThanOrEqual(1);
+    expect(escapeViolations[0]?.offendingTarget).toBe('../../core-extra/src/index.js');
+    expect(escapeViolations[0]?.reason).toContain(
+      'escapes workspace "@waflow/core" into "@waflow/core-extra"',
+    );
+  });
+
+  it('Scenario K: should detect relative cross-workspace escape using actual current-OS filesystem paths (ARCH-008)', () => {
+    const wsRootAlpha = path.resolve(process.cwd(), 'mock-fixtures', 'packages', 'alpha');
+    const wsRootBeta = path.resolve(process.cwd(), 'mock-fixtures', 'packages', 'beta');
+
+    const alphaWs: WorkspaceMeta = {
+      name: '@waflow/alpha',
+      dirName: 'alpha',
+      absolutePath: wsRootAlpha,
+      relativePath: 'packages/alpha',
+      kind: 'package',
+      dependencies: {},
+      devDependencies: {},
+    };
+
+    const betaWs: WorkspaceMeta = {
+      name: '@waflow/beta',
+      dirName: 'beta',
+      absolutePath: wsRootBeta,
+      relativePath: 'packages/beta',
+      kind: 'package',
+      dependencies: {},
+      devDependencies: {},
+    };
+
+    const alphaFiles = [
+      {
+        filePath: path.resolve(wsRootAlpha, 'src', 'main.ts'),
+        content: `import '../../beta/src/index.js';`,
+      },
+    ];
+    const betaFiles = [
+      {
+        filePath: path.resolve(wsRootBeta, 'src', 'index.ts'),
+        content: `export const BETA = true;`,
+      },
+    ];
+
+    const workspaces = [alphaWs, betaWs];
+    const customFiles = new Map([
+      ['@waflow/alpha', alphaFiles],
+      ['@waflow/beta', betaFiles],
+    ]);
+
+    const result = analyzeArchitecture({ workspaces, customFiles });
+    expect(result.success).toBe(false);
+
+    const escapeViolations = result.violations.filter((v) => v.ruleId === 'ARCH-008');
+    expect(escapeViolations.length).toBeGreaterThanOrEqual(1);
+    expect(escapeViolations[0]?.reason).toContain(
+      'escapes workspace "@waflow/alpha" into "@waflow/beta"',
+    );
   });
 });

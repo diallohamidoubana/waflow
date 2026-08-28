@@ -84,6 +84,48 @@ export function discoverWorkspaces(monorepoRoot: string): WorkspaceMeta[] {
 }
 
 /**
+ * Determines whether candidatePath is inside parentDir (or identical to parentDir).
+ * Uses path-aware relative traversal rather than string prefix matching.
+ *
+ * Correctly distinguishes:
+ * A. candidate == root (returns true)
+ * B. candidate is inside root (returns true)
+ * C. candidate escapes root using .. (returns false)
+ * D. candidate is an absolute path outside root / different drive (returns false)
+ */
+export function isPathInside(
+  parentDir: string,
+  candidatePath: string,
+  pathModule: typeof path.posix | typeof path.win32 | typeof path = path,
+): boolean {
+  const resolvedParent = pathModule.resolve(parentDir);
+  const resolvedCandidate = pathModule.resolve(candidatePath);
+  const rel = pathModule.relative(resolvedParent, resolvedCandidate);
+
+  // If relative path is empty, candidatePath is identical to parentDir
+  if (rel === '') {
+    return true;
+  }
+
+  // If relative path is '..' or starts with '..' + sep, it has escaped parentDir
+  if (
+    rel === '..' ||
+    rel.startsWith(`..${pathModule.sep}`) ||
+    rel.startsWith('../') ||
+    rel.startsWith('..\\')
+  ) {
+    return false;
+  }
+
+  // On Windows, if on different drives/roots, path.relative returns an absolute path
+  if (pathModule.isAbsolute(rel)) {
+    return false;
+  }
+
+  return true;
+}
+
+/**
  * Extracts all import and require specifiers from a source file.
  */
 export function extractImportsFromSource(
@@ -91,6 +133,7 @@ export function extractImportsFromSource(
   content: string,
   currentWorkspace: WorkspaceMeta,
   allWorkspaces: readonly WorkspaceMeta[],
+  pathModule: typeof path.posix | typeof path.win32 | typeof path = path,
 ): ImportReference[] {
   const references: ImportReference[] = [];
   const lines = content.split('\n');
@@ -121,21 +164,21 @@ export function extractImportsFromSource(
           isDeepImport = true;
         }
       } else if (rawSpecifier.startsWith('.')) {
-        const resolvedAbsolute = path.resolve(path.dirname(filePath), rawSpecifier);
-        const normalizedResolved = resolvedAbsolute.replace(/\\/g, '/');
-        const normalizedCurrentWs = currentWorkspace.absolutePath.replace(/\\/g, '/');
+        const fileDir = pathModule.dirname(filePath);
+        const resolvedAbsolute = pathModule.resolve(fileDir, rawSpecifier);
 
-        if (
-          !normalizedResolved.startsWith(normalizedCurrentWs + '/') &&
-          normalizedResolved !== normalizedCurrentWs
-        ) {
+        // Check if the resolved import stays inside the current workspace
+        const staysInCurrentWs = isPathInside(
+          currentWorkspace.absolutePath,
+          resolvedAbsolute,
+          pathModule,
+        );
+
+        if (!staysInCurrentWs) {
+          // If it escapes the current workspace, check if it enters another workspace
           for (const otherWs of allWorkspaces) {
             if (otherWs.name === currentWorkspace.name) continue;
-            const otherWsNormalized = otherWs.absolutePath.replace(/\\/g, '/');
-            if (
-              normalizedResolved.startsWith(otherWsNormalized + '/') ||
-              normalizedResolved === otherWsNormalized
-            ) {
+            if (isPathInside(otherWs.absolutePath, resolvedAbsolute, pathModule)) {
               isCrossWorkspaceRelativeEscape = true;
               targetWorkspaceName = otherWs.name;
               break;
