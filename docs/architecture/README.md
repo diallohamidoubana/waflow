@@ -51,3 +51,10 @@ In WAFLOW, high-level business policies do not depend on low-level technical mec
 - Application composition roots wire adapters to domain services at runtime.
 
 This design guarantees that databases, AI providers, message brokers, and third-party APIs can be substituted or upgraded with zero impact on core domain business rules.
+
+---
+
+## 4. Architecture Specifications
+
+- [Dependency Model](dependency-model.md) — Detailed package dependency matrix, allowlists, and boundaries (ARCH-001 to ARCH-014).
+- [Multi-Tenancy Architecture](multi-tenancy.md) — Organization tenant boundary, TenantContext, isolation invariants, and data classification.
