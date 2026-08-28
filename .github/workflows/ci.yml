@@ -1,0 +1,66 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality-gates:
+    name: quality-gates (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.4
+
+      - name: Setup Node.js 22.14.0
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.14.0
+          cache: pnpm
+
+      - name: Install dependencies (frozen lockfile)
+        run: pnpm install --frozen-lockfile
+
+      - name: Check code formatting (Prettier)
+        run: pnpm format:check
+
+      - name: Check lint rules (ESLint)
+        run: pnpm lint
+
+      - name: Check types (TypeScript)
+        run: pnpm typecheck
+
+      - name: Check architecture boundaries
+        run: pnpm test:architecture
+
+      - name: Run automated test suite (Vitest)
+        run: pnpm test
+
+      - name: Build monorepo packages and apps (Turborepo)
+        run: pnpm build

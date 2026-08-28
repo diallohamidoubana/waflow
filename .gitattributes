@@ -1,0 +1,20 @@
+# WAFLOW Canonical Line Ending Policy
+# Enforce LF for all text files across Windows and Linux
+* text=auto eol=lf
+
+# Windows batch scripts require CRLF
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Binary file types - prevent any text conversions
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary
+*.pdf binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.eot binary
