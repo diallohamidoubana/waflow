@@ -16,6 +16,26 @@ import type {
 } from './types.js';
 
 /**
+ * Checks if a file path is a test or tooling file.
+ */
+export function isTestOrToolingFile(filePath: string): boolean {
+  const normalized = filePath.replace(/\\/g, '/');
+  const fileName = path.basename(normalized);
+  return (
+    fileName.includes('.test.') ||
+    fileName.includes('.spec.') ||
+    fileName.endsWith('.test.ts') ||
+    fileName.endsWith('.spec.ts') ||
+    fileName.endsWith('.test.js') ||
+    fileName.endsWith('.spec.js') ||
+    normalized.includes('/_tests_/') ||
+    normalized.includes('/__tests__/') ||
+    normalized.includes('/test/') ||
+    normalized.includes('/tests/')
+  );
+}
+
+/**
  * Discovers all workspace packages and apps from the monorepo root.
  */
 export function discoverWorkspaces(monorepoRoot: string): WorkspaceMeta[] {
@@ -155,12 +175,7 @@ export function scanWorkspaceSourceFiles(workspaceDir: string): string[] {
         }
       } else if (entry.isFile()) {
         const ext = path.extname(entry.name);
-        const isTestFile =
-          entry.name.includes('.test.') ||
-          entry.name.includes('.spec.') ||
-          entry.name.endsWith('.test.ts') ||
-          entry.name.endsWith('.spec.ts');
-        if (['.ts', '.tsx', '.js', '.mjs', '.cjs'].includes(ext) && !isTestFile) {
+        if (['.ts', '.tsx', '.js', '.mjs', '.cjs'].includes(ext)) {
           sourceFiles.push(path.resolve(currentDir, entry.name));
         }
       }
@@ -248,7 +263,7 @@ export function analyzeArchitecture(
     }
   }
 
-  // Build dependency graph for cycle detection (packages only)
+  // Unified dependency graph for cycle detection (ARCH-009)
   const packageDependencyGraph = new Map<string, Set<string>>();
   for (const pkgName of packageNames) {
     packageDependencyGraph.set(pkgName, new Set());
@@ -256,10 +271,11 @@ export function analyzeArchitecture(
 
   // 1. Validate package.json declared dependencies
   for (const ws of workspaces) {
-    const allDeclaredDeps = {
-      ...ws.dependencies,
-      ...ws.peerDependencies,
-    };
+    const allDeclaredSections: { section: string; deps: Record<string, string> }[] = [
+      { section: 'dependencies', deps: ws.dependencies },
+      { section: 'devDependencies', deps: ws.devDependencies },
+      { section: 'peerDependencies', deps: ws.peerDependencies ?? {} },
+    ];
 
     // ARCH-010: @waflow/testing must not be in production dependencies
     if (ws.dependencies['@waflow/testing']) {
@@ -271,6 +287,30 @@ export function analyzeArchitecture(
           '@waflow/testing must not appear as a production dependency. It is strictly for test execution.',
       });
     }
+
+    // ARCH-014: Internal @waflow/* dependencies must use workspace: protocol
+    for (const { section, deps } of allDeclaredSections) {
+      for (const [depName, versionSpec] of Object.entries(deps)) {
+        if (!depName.startsWith('@waflow/')) continue;
+        if (!workspaceMap.has(depName)) continue; // Handled by ARCH-011
+
+        if (!versionSpec.startsWith('workspace:')) {
+          violations.push({
+            ruleId: 'ARCH-014',
+            sourceWorkspace: ws.name,
+            offendingTarget: depName,
+            reason: `Workspace "${ws.name}" declares internal dependency "${depName}" with version "${versionSpec}" in ${section} without using the workspace: protocol (e.g. "workspace:*").`,
+          });
+        }
+      }
+    }
+
+    // Check all declared dependencies for boundary rules
+    const allDeclaredDeps = {
+      ...ws.dependencies,
+      ...ws.peerDependencies,
+      ...ws.devDependencies,
+    };
 
     for (const depName of Object.keys(allDeclaredDeps)) {
       if (!depName.startsWith('@waflow/')) continue;
@@ -311,71 +351,75 @@ export function analyzeArchitecture(
         });
       }
 
-      // ARCH-003: @waflow/domain dependencies
-      if (ws.name === '@waflow/domain') {
-        violations.push({
-          ruleId: 'ARCH-003',
-          sourceWorkspace: ws.name,
-          offendingTarget: depName,
-          reason: `@waflow/domain cannot depend on "${depName}". Domain must remain purely independent with 0 workspace dependencies.`,
-        });
-      }
-
-      // ARCH-004: @waflow/contracts dependencies
-      if (ws.name === '@waflow/contracts') {
-        violations.push({
-          ruleId: 'ARCH-004',
-          sourceWorkspace: ws.name,
-          offendingTarget: depName,
-          reason: `@waflow/contracts cannot depend on "${depName}". Contracts must remain independent.`,
-        });
-      }
-
-      // ARCH-005: @waflow/config dependencies
-      if (ws.name === '@waflow/config') {
-        violations.push({
-          ruleId: 'ARCH-005',
-          sourceWorkspace: ws.name,
-          offendingTarget: depName,
-          reason: `@waflow/config cannot depend on "${depName}". Config primitives must remain independent.`,
-        });
-      }
-
-      // ARCH-006: Package allowlists
-      if (ws.kind === 'package' && ws.name !== '@waflow/testing') {
-        const allowed = PACKAGE_ALLOWLISTS[ws.name] ?? [];
-        if (!allowed.includes(depName)) {
+      // Check production dependency allowlists
+      const isProductionDep = Boolean(ws.dependencies[depName] || ws.peerDependencies?.[depName]);
+      if (isProductionDep) {
+        // ARCH-003: @waflow/domain dependencies
+        if (ws.name === '@waflow/domain') {
           violations.push({
-            ruleId: 'ARCH-006',
+            ruleId: 'ARCH-003',
             sourceWorkspace: ws.name,
             offendingTarget: depName,
-            reason: `Dependency "${depName}" is not in the architecture allowlist for "${ws.name}". Allowed: [${allowed.join(', ') || 'none'}].`,
+            reason: `@waflow/domain cannot depend on "${depName}". Domain must remain purely independent with 0 workspace dependencies.`,
           });
         }
-      }
 
-      // ARCH-007: Frontend apps allowlist & forbidden dependencies
-      if (ws.appKind === 'presentation') {
-        if ((FRONTEND_FORBIDDEN_DEPS as readonly string[]).includes(depName)) {
+        // ARCH-004: @waflow/contracts dependencies
+        if (ws.name === '@waflow/contracts') {
           violations.push({
-            ruleId: 'ARCH-007',
+            ruleId: 'ARCH-004',
             sourceWorkspace: ws.name,
             offendingTarget: depName,
-            reason: `Frontend application "${ws.name}" cannot depend on backend/infrastructure package "${depName}".`,
+            reason: `@waflow/contracts cannot depend on "${depName}". Contracts must remain independent.`,
           });
-        } else if (!(FRONTEND_ALLOWED_DEPS as readonly string[]).includes(depName)) {
+        }
+
+        // ARCH-005: @waflow/config dependencies
+        if (ws.name === '@waflow/config') {
           violations.push({
-            ruleId: 'ARCH-007',
+            ruleId: 'ARCH-005',
             sourceWorkspace: ws.name,
             offendingTarget: depName,
-            reason: `Dependency "${depName}" is not permitted for frontend application "${ws.name}". Allowed: [${FRONTEND_ALLOWED_DEPS.join(', ')}].`,
+            reason: `@waflow/config cannot depend on "${depName}". Config primitives must remain independent.`,
           });
+        }
+
+        // ARCH-006: Package allowlists
+        if (ws.kind === 'package' && ws.name !== '@waflow/testing') {
+          const allowed = PACKAGE_ALLOWLISTS[ws.name] ?? [];
+          if (!allowed.includes(depName)) {
+            violations.push({
+              ruleId: 'ARCH-006',
+              sourceWorkspace: ws.name,
+              offendingTarget: depName,
+              reason: `Dependency "${depName}" is not in the architecture allowlist for "${ws.name}". Allowed: [${allowed.join(', ') || 'none'}].`,
+            });
+          }
+        }
+
+        // ARCH-007: Frontend apps allowlist & forbidden dependencies
+        if (ws.appKind === 'presentation') {
+          if ((FRONTEND_FORBIDDEN_DEPS as readonly string[]).includes(depName)) {
+            violations.push({
+              ruleId: 'ARCH-007',
+              sourceWorkspace: ws.name,
+              offendingTarget: depName,
+              reason: `Frontend application "${ws.name}" cannot depend on backend/infrastructure package "${depName}".`,
+            });
+          } else if (!(FRONTEND_ALLOWED_DEPS as readonly string[]).includes(depName)) {
+            violations.push({
+              ruleId: 'ARCH-007',
+              sourceWorkspace: ws.name,
+              offendingTarget: depName,
+              reason: `Dependency "${depName}" is not permitted for frontend application "${ws.name}". Allowed: [${FRONTEND_ALLOWED_DEPS.join(', ')}].`,
+            });
+          }
         }
       }
     }
   }
 
-  // 2. Validate source code imports
+  // 2. Validate source code imports & ARCH-013 (No phantom dependencies)
   for (const ws of workspaces) {
     let sourceFiles: readonly { filePath: string; content: string }[] = [];
 
@@ -391,7 +435,14 @@ export function analyzeArchitecture(
 
     totalSourceFiles += sourceFiles.length;
 
+    const prodDeclared = new Set([
+      ...Object.keys(ws.dependencies),
+      ...Object.keys(ws.peerDependencies ?? {}),
+    ]);
+    const allDeclared = new Set([...prodDeclared, ...Object.keys(ws.devDependencies)]);
+
     for (const { filePath, content } of sourceFiles) {
+      const isTest = isTestOrToolingFile(filePath);
       const imports = extractImportsFromSource(filePath, content, ws, workspaces);
 
       for (const imp of imports) {
@@ -422,113 +473,148 @@ export function analyzeArchitecture(
         const target = imp.targetWorkspaceName;
         if (!target) continue;
 
-        // Record in dependency graph for cycle detection from source imports
-        if (ws.kind === 'package' && packageNames.has(target)) {
+        // Harden ARCH-009: Record all cross-package source relationships into cycle graph
+        if (ws.kind === 'package' && packageNames.has(target) && target !== ws.name) {
           packageDependencyGraph.get(ws.name)?.add(target);
         }
 
-        // ARCH-001: Source import from package to app
-        if (ws.kind === 'package' && appNames.has(target)) {
-          violations.push({
-            ruleId: 'ARCH-001',
-            sourceWorkspace: ws.name,
-            offendingTarget: imp.rawSpecifier,
-            sourceFile: filePath,
-            line: imp.line,
-            reason: `Package "${ws.name}" imports from application "${target}". Packages must never import applications.`,
-          });
-        }
-
-        // ARCH-002: Source import from app to another app
-        if (ws.kind === 'app' && appNames.has(target) && target !== ws.name) {
-          violations.push({
-            ruleId: 'ARCH-002',
-            sourceWorkspace: ws.name,
-            offendingTarget: imp.rawSpecifier,
-            sourceFile: filePath,
-            line: imp.line,
-            reason: `Application "${ws.name}" imports from application "${target}". Cross-application imports are forbidden.`,
-          });
-        }
-
-        // ARCH-003: Source import in @waflow/domain
-        if (ws.name === '@waflow/domain' && target !== '@waflow/domain') {
-          violations.push({
-            ruleId: 'ARCH-003',
-            sourceWorkspace: ws.name,
-            offendingTarget: imp.rawSpecifier,
-            sourceFile: filePath,
-            line: imp.line,
-            reason: `@waflow/domain source code imports "${target}". Domain logic must remain independent.`,
-          });
-        }
-
-        // ARCH-004: Source import in @waflow/contracts
-        if (ws.name === '@waflow/contracts' && target !== '@waflow/contracts') {
-          violations.push({
-            ruleId: 'ARCH-004',
-            sourceWorkspace: ws.name,
-            offendingTarget: imp.rawSpecifier,
-            sourceFile: filePath,
-            line: imp.line,
-            reason: `@waflow/contracts source code imports "${target}". Contracts must remain independent.`,
-          });
-        }
-
-        // ARCH-005: Source import in @waflow/config
-        if (ws.name === '@waflow/config' && target !== '@waflow/config') {
-          violations.push({
-            ruleId: 'ARCH-005',
-            sourceWorkspace: ws.name,
-            offendingTarget: imp.rawSpecifier,
-            sourceFile: filePath,
-            line: imp.line,
-            reason: `@waflow/config source code imports "${target}". Config primitives must remain independent.`,
-          });
-        }
-
-        // ARCH-006: Package source imports allowlist
-        if (ws.kind === 'package' && ws.name !== '@waflow/testing' && target !== ws.name) {
-          const allowed = PACKAGE_ALLOWLISTS[ws.name] ?? [];
-          if (!allowed.includes(target)) {
-            violations.push({
-              ruleId: 'ARCH-006',
-              sourceWorkspace: ws.name,
-              offendingTarget: imp.rawSpecifier,
-              sourceFile: filePath,
-              line: imp.line,
-              reason: `Source import "${target}" is not in the architecture allowlist for "${ws.name}". Allowed: [${allowed.join(', ') || 'none'}].`,
-            });
+        // ARCH-013: No phantom dependencies
+        if (target !== ws.name && target.startsWith('@waflow/')) {
+          if (isTest) {
+            // For test/tooling files, devDependencies or dependencies must declare the workspace
+            if (!allDeclared.has(target)) {
+              violations.push({
+                ruleId: 'ARCH-013',
+                sourceWorkspace: ws.name,
+                offendingTarget: target,
+                sourceFile: filePath,
+                line: imp.line,
+                reason: `Workspace "${ws.name}" imports "${target}" in test file "${filePath}" but the dependency is not declared in package.json (dependencies or devDependencies).`,
+              });
+            }
+          } else {
+            // For production source code, must be in dependencies or peerDependencies (NOT only devDependencies)
+            if (!prodDeclared.has(target)) {
+              const inDev = Boolean(ws.devDependencies[target]);
+              violations.push({
+                ruleId: 'ARCH-013',
+                sourceWorkspace: ws.name,
+                offendingTarget: target,
+                sourceFile: filePath,
+                line: imp.line,
+                reason: inDev
+                  ? `Workspace "${ws.name}" imports "${target}" in production source code ("${filePath}") but "${target}" is declared only in devDependencies. Production imports must be declared in dependencies or peerDependencies.`
+                  : `Workspace "${ws.name}" imports "${target}" in production source code ("${filePath}") but the dependency is not declared in package.json.`,
+              });
+            }
           }
         }
 
-        // ARCH-007: Frontend source imports
-        if (ws.appKind === 'presentation' && target !== ws.name) {
-          if ((FRONTEND_FORBIDDEN_DEPS as readonly string[]).includes(target)) {
+        // Production boundary checks (ARCH-001, ARCH-002, ARCH-003, ARCH-004, ARCH-005, ARCH-006, ARCH-007)
+        if (!isTest) {
+          // ARCH-001: Source import from package to app
+          if (ws.kind === 'package' && appNames.has(target)) {
             violations.push({
-              ruleId: 'ARCH-007',
+              ruleId: 'ARCH-001',
               sourceWorkspace: ws.name,
               offendingTarget: imp.rawSpecifier,
               sourceFile: filePath,
               line: imp.line,
-              reason: `Frontend application "${ws.name}" cannot import from backend package "${target}".`,
+              reason: `Package "${ws.name}" imports from application "${target}". Packages must never import applications.`,
             });
-          } else if (!(FRONTEND_ALLOWED_DEPS as readonly string[]).includes(target)) {
+          }
+
+          // ARCH-002: Source import from app to another app
+          if (ws.kind === 'app' && appNames.has(target) && target !== ws.name) {
             violations.push({
-              ruleId: 'ARCH-007',
+              ruleId: 'ARCH-002',
               sourceWorkspace: ws.name,
               offendingTarget: imp.rawSpecifier,
               sourceFile: filePath,
               line: imp.line,
-              reason: `Source import "${target}" is not permitted for frontend application "${ws.name}". Allowed: [${FRONTEND_ALLOWED_DEPS.join(', ')}].`,
+              reason: `Application "${ws.name}" imports from application "${target}". Cross-application imports are forbidden.`,
             });
+          }
+
+          // ARCH-003: Source import in @waflow/domain
+          if (ws.name === '@waflow/domain' && target !== '@waflow/domain') {
+            violations.push({
+              ruleId: 'ARCH-003',
+              sourceWorkspace: ws.name,
+              offendingTarget: imp.rawSpecifier,
+              sourceFile: filePath,
+              line: imp.line,
+              reason: `@waflow/domain source code imports "${target}". Domain logic must remain independent.`,
+            });
+          }
+
+          // ARCH-004: Source import in @waflow/contracts
+          if (ws.name === '@waflow/contracts' && target !== '@waflow/contracts') {
+            violations.push({
+              ruleId: 'ARCH-004',
+              sourceWorkspace: ws.name,
+              offendingTarget: imp.rawSpecifier,
+              sourceFile: filePath,
+              line: imp.line,
+              reason: `@waflow/contracts source code imports "${target}". Contracts must remain independent.`,
+            });
+          }
+
+          // ARCH-005: Source import in @waflow/config
+          if (ws.name === '@waflow/config' && target !== '@waflow/config') {
+            violations.push({
+              ruleId: 'ARCH-005',
+              sourceWorkspace: ws.name,
+              offendingTarget: imp.rawSpecifier,
+              sourceFile: filePath,
+              line: imp.line,
+              reason: `@waflow/config source code imports "${target}". Config primitives must remain independent.`,
+            });
+          }
+
+          // ARCH-006: Package source imports allowlist
+          if (ws.kind === 'package' && ws.name !== '@waflow/testing' && target !== ws.name) {
+            const allowed = PACKAGE_ALLOWLISTS[ws.name] ?? [];
+            if (!allowed.includes(target)) {
+              violations.push({
+                ruleId: 'ARCH-006',
+                sourceWorkspace: ws.name,
+                offendingTarget: imp.rawSpecifier,
+                sourceFile: filePath,
+                line: imp.line,
+                reason: `Source import "${target}" is not in the architecture allowlist for "${ws.name}". Allowed: [${allowed.join(', ') || 'none'}].`,
+              });
+            }
+          }
+
+          // ARCH-007: Frontend source imports
+          if (ws.appKind === 'presentation' && target !== ws.name) {
+            if ((FRONTEND_FORBIDDEN_DEPS as readonly string[]).includes(target)) {
+              violations.push({
+                ruleId: 'ARCH-007',
+                sourceWorkspace: ws.name,
+                offendingTarget: imp.rawSpecifier,
+                sourceFile: filePath,
+                line: imp.line,
+                reason: `Frontend application "${ws.name}" cannot import from backend package "${target}".`,
+              });
+            } else if (!(FRONTEND_ALLOWED_DEPS as readonly string[]).includes(target)) {
+              violations.push({
+                ruleId: 'ARCH-007',
+                sourceWorkspace: ws.name,
+                offendingTarget: imp.rawSpecifier,
+                sourceFile: filePath,
+                line: imp.line,
+                reason: `Source import "${target}" is not permitted for frontend application "${ws.name}". Allowed: [${FRONTEND_ALLOWED_DEPS.join(', ')}].`,
+              });
+            }
           }
         }
       }
     }
   }
 
-  // 3. ARCH-009: Detect circular dependencies between packages
+  // 3. ARCH-009: Detect circular dependencies between packages (manifest + source imports)
   const cycles = findCyclesInGraph(packageDependencyGraph);
   for (const cycle of cycles) {
     violations.push({

@@ -8,7 +8,10 @@ function createMockWorkspace(
   options: {
     appKind?: 'composition' | 'presentation';
     dependencies?: Record<string, string>;
+    devDependencies?: Record<string, string>;
+    peerDependencies?: Record<string, string>;
     sourceImports?: string[];
+    customFiles?: { filePath: string; content: string }[];
   } = {},
 ): { meta: WorkspaceMeta; files: { filePath: string; content: string }[] } {
   const dirName = name.replace('@waflow/', '');
@@ -22,9 +25,13 @@ function createMockWorkspace(
     kind,
     appKind: options.appKind,
     dependencies: options.dependencies ?? {},
-    devDependencies: {},
-    peerDependencies: {},
+    devDependencies: options.devDependencies ?? {},
+    peerDependencies: options.peerDependencies ?? {},
   };
+
+  if (options.customFiles) {
+    return { meta, files: options.customFiles };
+  }
 
   const importLines = (options.sourceImports ?? []).map((imp) => `import '${imp}';`).join('\n');
   const files = [
@@ -132,7 +139,6 @@ describe('Architecture Test Engine — Boundary Enforcement', () => {
     const domainWs = createMockWorkspace('@waflow/domain', 'package');
     const dbWs = createMockWorkspace('@waflow/database', 'package');
 
-    // Create a file with relative path escaping into domain
     const escapingFile = {
       filePath: `${dbWs.meta.absolutePath}/src/repository.ts`,
       content: `import '../../domain/src/index.js';`,
@@ -245,5 +251,143 @@ describe('Architecture Test Engine — Boundary Enforcement', () => {
     const result = analyzeArchitecture({ workspaces, customFiles });
     expect(result.success).toBe(true);
     expect(result.violations).toHaveLength(0);
+  });
+
+  // HARDENING TESTS (ARCH-013, ARCH-014, hardened ARCH-009)
+
+  it('Scenario A: should detect allowed workspace import but missing manifest dependency (ARCH-013)', () => {
+    const contracts = createMockWorkspace('@waflow/contracts', 'package');
+    // @waflow/events allows @waflow/contracts, but events/package.json does not declare it
+    const events = createMockWorkspace('@waflow/events', 'package', {
+      dependencies: {}, // Missing @waflow/contracts
+      sourceImports: ['@waflow/contracts'],
+    });
+
+    const workspaces = [contracts.meta, events.meta];
+    const customFiles = new Map([
+      [contracts.meta.name, contracts.files],
+      [events.meta.name, events.files],
+    ]);
+
+    const result = analyzeArchitecture({ workspaces, customFiles });
+    expect(result.success).toBe(false);
+
+    const phantomViolations = result.violations.filter((v) => v.ruleId === 'ARCH-013');
+    expect(phantomViolations.length).toBeGreaterThanOrEqual(1);
+    expect(phantomViolations[0]?.reason).toContain('not declared in package.json');
+  });
+
+  it('Scenario B: should detect production source importing workspace dependency declared only in devDependencies (ARCH-013)', () => {
+    const contracts = createMockWorkspace('@waflow/contracts', 'package');
+    // @waflow/events imports @waflow/contracts in src/index.ts, but only declares it in devDependencies
+    const events = createMockWorkspace('@waflow/events', 'package', {
+      dependencies: {},
+      devDependencies: { '@waflow/contracts': 'workspace:*' },
+      sourceImports: ['@waflow/contracts'],
+    });
+
+    const workspaces = [contracts.meta, events.meta];
+    const customFiles = new Map([
+      [contracts.meta.name, contracts.files],
+      [events.meta.name, events.files],
+    ]);
+
+    const result = analyzeArchitecture({ workspaces, customFiles });
+    expect(result.success).toBe(false);
+
+    const devDepViolations = result.violations.filter((v) => v.ruleId === 'ARCH-013');
+    expect(devDepViolations.length).toBeGreaterThanOrEqual(1);
+    expect(devDepViolations[0]?.reason).toContain('declared only in devDependencies');
+  });
+
+  it('Scenario C: should allow test source importing workspace dependency declared in devDependencies (VALID)', () => {
+    const testingPkg = createMockWorkspace('@waflow/testing', 'package');
+    const domainPkg = createMockWorkspace('@waflow/domain', 'package', {
+      devDependencies: { '@waflow/testing': 'workspace:*' },
+      customFiles: [
+        {
+          filePath: `C:/mock/waflow/packages/domain/src/index.ts`,
+          content: `export const DOMAIN = true;`,
+        },
+        {
+          filePath: `C:/mock/waflow/packages/domain/src/domain.test.ts`,
+          content: `import '@waflow/testing';`,
+        },
+      ],
+    });
+
+    const workspaces = [testingPkg.meta, domainPkg.meta];
+    const customFiles = new Map([
+      [testingPkg.meta.name, testingPkg.files],
+      [domainPkg.meta.name, domainPkg.files],
+    ]);
+
+    const result = analyzeArchitecture({ workspaces, customFiles });
+    expect(result.success).toBe(true);
+    expect(result.violations).toHaveLength(0);
+  });
+
+  it('Scenario D: should detect internal WAFLOW dependency declared using normal semver instead of workspace: protocol (ARCH-014)', () => {
+    const contracts = createMockWorkspace('@waflow/contracts', 'package');
+    const events = createMockWorkspace('@waflow/events', 'package', {
+      dependencies: { '@waflow/contracts': '^1.0.0' }, // Invalid semver instead of workspace:*
+    });
+
+    const workspaces = [contracts.meta, events.meta];
+    const customFiles = new Map([
+      [contracts.meta.name, contracts.files],
+      [events.meta.name, events.files],
+    ]);
+
+    const result = analyzeArchitecture({ workspaces, customFiles });
+    expect(result.success).toBe(false);
+
+    const protocolViolations = result.violations.filter((v) => v.ruleId === 'ARCH-014');
+    expect(protocolViolations.length).toBeGreaterThanOrEqual(1);
+    expect(protocolViolations[0]?.reason).toContain('without using the workspace: protocol');
+  });
+
+  it('Scenario E: should accept internal WAFLOW dependency using workspace:* (VALID)', () => {
+    const contracts = createMockWorkspace('@waflow/contracts', 'package');
+    const events = createMockWorkspace('@waflow/events', 'package', {
+      dependencies: { '@waflow/contracts': 'workspace:*' },
+      sourceImports: ['@waflow/contracts'],
+    });
+
+    const workspaces = [contracts.meta, events.meta];
+    const customFiles = new Map([
+      [contracts.meta.name, contracts.files],
+      [events.meta.name, events.files],
+    ]);
+
+    const result = analyzeArchitecture({ workspaces, customFiles });
+    expect(result.success).toBe(true);
+    expect(result.violations).toHaveLength(0);
+  });
+
+  it('Scenario F: should detect source-level package cycles that attempt to bypass declared dependencies (ARCH-009)', () => {
+    // pkgA and pkgB have no declared dependencies in package.json, but their source files import each other
+    const pkgA = createMockWorkspace('@waflow/ai', 'package', {
+      dependencies: {},
+      sourceImports: ['@waflow/integrations'],
+    });
+    const pkgB = createMockWorkspace('@waflow/integrations', 'package', {
+      dependencies: {},
+      sourceImports: ['@waflow/ai'],
+    });
+
+    const workspaces = [pkgA.meta, pkgB.meta];
+    const customFiles = new Map([
+      [pkgA.meta.name, pkgA.files],
+      [pkgB.meta.name, pkgB.files],
+    ]);
+
+    const result = analyzeArchitecture({ workspaces, customFiles });
+    expect(result.success).toBe(false);
+
+    // Both ARCH-013 (phantom dependencies) and ARCH-009 (cycle detection) must be reported
+    const cycleViolations = result.violations.filter((v) => v.ruleId === 'ARCH-009');
+    expect(cycleViolations.length).toBeGreaterThanOrEqual(1);
+    expect(cycleViolations[0]?.reason).toContain('Circular dependency detected');
   });
 });

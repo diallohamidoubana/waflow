@@ -77,4 +77,8 @@ export const RULE_DESCRIPTIONS: Readonly<Record<RuleId, string>> = {
   'ARCH-010': '@waflow/testing must not appear as a production dependency of another workspace.',
   'ARCH-011': 'Unknown @waflow workspace dependencies must fail validation.',
   'ARCH-012': 'Every workspace package name must remain unique.',
+  'ARCH-013':
+    'Any source import from one WAFLOW workspace into another must be declared in package.json (no phantom dependencies).',
+  'ARCH-014':
+    'All declared internal @waflow/* workspace dependencies must use the workspace: protocol.',
 };

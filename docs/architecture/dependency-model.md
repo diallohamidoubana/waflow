@@ -62,11 +62,17 @@ This document specifies the official dependency rules and package allowlists for
 
 ## 2. Import Rules & Boundary Integrity
 
-1. **Public Entry Points Only**:
+1. **Public Entry Points Only (ARCH-008)**:
    All cross-package imports must resolve to the package root (e.g. `import { Money } from '@waflow/domain'`). Deep imports (e.g. `import { Money } from '@waflow/domain/src/money.js'`) are strictly rejected.
-2. **No Relative Escaping**:
+2. **No Relative Escaping (ARCH-008)**:
    Relative imports (`../`, `../../`) must never cross workspace boundaries into neighboring packages.
-3. **No Circular Dependencies**:
-   The package dependency graph must remain an acyclic directed graph (DAG).
-4. **Machine Enforcement**:
+3. **No Circular Dependencies (ARCH-009)**:
+   The package dependency graph must remain an acyclic directed graph (DAG). Cycle detection inspects both declared manifest relationships and concrete source-level imports.
+4. **No Phantom Workspace Dependencies (ARCH-013)**:
+   Any source import from one WAFLOW workspace into another must be declared in the importing workspace's `package.json`. Belonging to an architecture allowlist is necessary but not sufficient.
+   - **Production source code** (`src/**` excluding test files) must declare workspace dependencies in `dependencies` or `peerDependencies`. Relying solely on `devDependencies` or monorepo hoisting is forbidden.
+   - **Test and tooling source code** may declare dependencies in `devDependencies`.
+5. **Internal Workspace Protocol (ARCH-014)**:
+   All declared `@waflow/*` dependencies across all manifest sections must use pnpm's `workspace:` protocol (e.g. `workspace:*`, `workspace:^`, `workspace:~`). Registry-style semver (`^1.0.0`, `1.0.0`, `latest`) is forbidden for local workspaces.
+6. **Machine Enforcement**:
    Every rule documented here is machine-validated via `pnpm test:architecture` and enforced in CI pipelines.

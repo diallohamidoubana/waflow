@@ -25,7 +25,9 @@ export type RuleId =
   | 'ARCH-009'
   | 'ARCH-010'
   | 'ARCH-011'
-  | 'ARCH-012';
+  | 'ARCH-012'
+  | 'ARCH-013'
+  | 'ARCH-014';
 
 export interface ImportReference {
   readonly sourceFile: string;
