@@ -11,6 +11,7 @@ export interface WorkspaceMeta {
   readonly dependencies: Record<string, string>;
   readonly devDependencies: Record<string, string>;
   readonly peerDependencies?: Record<string, string> | undefined;
+  readonly optionalDependencies?: Record<string, string> | undefined;
 }
 
 export type RuleId =

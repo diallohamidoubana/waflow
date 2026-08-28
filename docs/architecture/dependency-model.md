@@ -67,10 +67,10 @@ This document specifies the official dependency rules and package allowlists for
 2. **No Relative Escaping (ARCH-008)**:
    Relative imports (`../`, `../../`) must never cross workspace boundaries into neighboring packages.
 3. **No Circular Dependencies (ARCH-009)**:
-   The package dependency graph must remain an acyclic directed graph (DAG). Cycle detection inspects both declared manifest relationships and concrete source-level imports.
+   The package dependency graph must remain an acyclic directed graph (DAG). The effective graph evaluated for cycles incorporates all manifest sections (`dependencies`, `devDependencies`, `peerDependencies`, `optionalDependencies`) as well as concrete cross-workspace source imports to ensure no cycle escapes detection.
 4. **No Phantom Workspace Dependencies (ARCH-013)**:
    Any source import from one WAFLOW workspace into another must be declared in the importing workspace's `package.json`. Belonging to an architecture allowlist is necessary but not sufficient.
-   - **Production source code** (`src/**` excluding test files) must declare workspace dependencies in `dependencies` or `peerDependencies`. Relying solely on `devDependencies` or monorepo hoisting is forbidden.
+   - **Production source code** (`src/**` excluding test files) must declare workspace dependencies in `dependencies`, `peerDependencies`, or `optionalDependencies`. Relying solely on `devDependencies` or monorepo hoisting is forbidden.
    - **Test and tooling source code** may declare dependencies in `devDependencies`.
 5. **Internal Workspace Protocol (ARCH-014)**:
    All declared `@waflow/*` dependencies across all manifest sections must use pnpm's `workspace:` protocol (e.g. `workspace:*`, `workspace:^`, `workspace:~`). Registry-style semver (`^1.0.0`, `1.0.0`, `latest`) is forbidden for local workspaces.

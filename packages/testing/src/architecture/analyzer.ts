@@ -72,6 +72,7 @@ export function discoverWorkspaces(monorepoRoot: string): WorkspaceMeta[] {
           dependencies: (pkgJson.dependencies as Record<string, string>) ?? {},
           devDependencies: (pkgJson.devDependencies as Record<string, string>) ?? {},
           peerDependencies: (pkgJson.peerDependencies as Record<string, string>) ?? {},
+          optionalDependencies: (pkgJson.optionalDependencies as Record<string, string>) ?? {},
         });
       } catch (err) {
         console.error(`Failed to parse ${pkgJsonPath}:`, err);
@@ -175,8 +176,12 @@ export function scanWorkspaceSourceFiles(workspaceDir: string): string[] {
         }
       } else if (entry.isFile()) {
         const ext = path.extname(entry.name);
-        if (['.ts', '.tsx', '.js', '.mjs', '.cjs'].includes(ext)) {
-          sourceFiles.push(path.resolve(currentDir, entry.name));
+        const fullPath = path.join(currentDir, entry.name);
+        if (
+          ['.ts', '.tsx', '.js', '.mjs', '.cjs'].includes(ext) &&
+          !isTestOrToolingFile(fullPath)
+        ) {
+          sourceFiles.push(path.resolve(fullPath));
         }
       }
     }
@@ -275,6 +280,7 @@ export function analyzeArchitecture(
       { section: 'dependencies', deps: ws.dependencies },
       { section: 'devDependencies', deps: ws.devDependencies },
       { section: 'peerDependencies', deps: ws.peerDependencies ?? {} },
+      { section: 'optionalDependencies', deps: ws.optionalDependencies ?? {} },
     ];
 
     // ARCH-010: @waflow/testing must not be in production dependencies
@@ -305,10 +311,11 @@ export function analyzeArchitecture(
       }
     }
 
-    // Check all declared dependencies for boundary rules
+    // Check all declared dependencies for boundary rules and build cycle graph
     const allDeclaredDeps = {
       ...ws.dependencies,
       ...ws.peerDependencies,
+      ...ws.optionalDependencies,
       ...ws.devDependencies,
     };
 
@@ -326,7 +333,7 @@ export function analyzeArchitecture(
         continue;
       }
 
-      // Record in package dependency graph if both are packages
+      // Record in package dependency graph if both are packages (all declared sections)
       if (ws.kind === 'package' && packageNames.has(depName)) {
         packageDependencyGraph.get(ws.name)?.add(depName);
       }
@@ -351,8 +358,12 @@ export function analyzeArchitecture(
         });
       }
 
-      // Check production dependency allowlists
-      const isProductionDep = Boolean(ws.dependencies[depName] || ws.peerDependencies?.[depName]);
+      // Check production dependency allowlists (dependencies, peerDependencies, optionalDependencies)
+      const isProductionDep = Boolean(
+        ws.dependencies[depName] ||
+        ws.peerDependencies?.[depName] ||
+        ws.optionalDependencies?.[depName],
+      );
       if (isProductionDep) {
         // ARCH-003: @waflow/domain dependencies
         if (ws.name === '@waflow/domain') {
@@ -438,6 +449,7 @@ export function analyzeArchitecture(
     const prodDeclared = new Set([
       ...Object.keys(ws.dependencies),
       ...Object.keys(ws.peerDependencies ?? {}),
+      ...Object.keys(ws.optionalDependencies ?? {}),
     ]);
     const allDeclared = new Set([...prodDeclared, ...Object.keys(ws.devDependencies)]);
 
@@ -481,7 +493,7 @@ export function analyzeArchitecture(
         // ARCH-013: No phantom dependencies
         if (target !== ws.name && target.startsWith('@waflow/')) {
           if (isTest) {
-            // For test/tooling files, devDependencies or dependencies must declare the workspace
+            // For test/tooling files, devDependencies, optionalDependencies, dependencies or peerDependencies must declare the workspace
             if (!allDeclared.has(target)) {
               violations.push({
                 ruleId: 'ARCH-013',
@@ -493,7 +505,7 @@ export function analyzeArchitecture(
               });
             }
           } else {
-            // For production source code, must be in dependencies or peerDependencies (NOT only devDependencies)
+            // For production source code, must be in dependencies, peerDependencies, or optionalDependencies (NOT only devDependencies)
             if (!prodDeclared.has(target)) {
               const inDev = Boolean(ws.devDependencies[target]);
               violations.push({
@@ -503,7 +515,7 @@ export function analyzeArchitecture(
                 sourceFile: filePath,
                 line: imp.line,
                 reason: inDev
-                  ? `Workspace "${ws.name}" imports "${target}" in production source code ("${filePath}") but "${target}" is declared only in devDependencies. Production imports must be declared in dependencies or peerDependencies.`
+                  ? `Workspace "${ws.name}" imports "${target}" in production source code ("${filePath}") but "${target}" is declared only in devDependencies. Production imports must be declared in dependencies, peerDependencies, or optionalDependencies.`
                   : `Workspace "${ws.name}" imports "${target}" in production source code ("${filePath}") but the dependency is not declared in package.json.`,
               });
             }

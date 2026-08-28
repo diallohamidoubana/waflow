@@ -10,6 +10,7 @@ function createMockWorkspace(
     dependencies?: Record<string, string>;
     devDependencies?: Record<string, string>;
     peerDependencies?: Record<string, string>;
+    optionalDependencies?: Record<string, string>;
     sourceImports?: string[];
     customFiles?: { filePath: string; content: string }[];
   } = {},
@@ -27,6 +28,7 @@ function createMockWorkspace(
     dependencies: options.dependencies ?? {},
     devDependencies: options.devDependencies ?? {},
     peerDependencies: options.peerDependencies ?? {},
+    optionalDependencies: options.optionalDependencies ?? {},
   };
 
   if (options.customFiles) {
@@ -257,7 +259,6 @@ describe('Architecture Test Engine — Boundary Enforcement', () => {
 
   it('Scenario A: should detect allowed workspace import but missing manifest dependency (ARCH-013)', () => {
     const contracts = createMockWorkspace('@waflow/contracts', 'package');
-    // @waflow/events allows @waflow/contracts, but events/package.json does not declare it
     const events = createMockWorkspace('@waflow/events', 'package', {
       dependencies: {}, // Missing @waflow/contracts
       sourceImports: ['@waflow/contracts'],
@@ -279,7 +280,6 @@ describe('Architecture Test Engine — Boundary Enforcement', () => {
 
   it('Scenario B: should detect production source importing workspace dependency declared only in devDependencies (ARCH-013)', () => {
     const contracts = createMockWorkspace('@waflow/contracts', 'package');
-    // @waflow/events imports @waflow/contracts in src/index.ts, but only declares it in devDependencies
     const events = createMockWorkspace('@waflow/events', 'package', {
       dependencies: {},
       devDependencies: { '@waflow/contracts': 'workspace:*' },
@@ -330,7 +330,7 @@ describe('Architecture Test Engine — Boundary Enforcement', () => {
   it('Scenario D: should detect internal WAFLOW dependency declared using normal semver instead of workspace: protocol (ARCH-014)', () => {
     const contracts = createMockWorkspace('@waflow/contracts', 'package');
     const events = createMockWorkspace('@waflow/events', 'package', {
-      dependencies: { '@waflow/contracts': '^1.0.0' }, // Invalid semver instead of workspace:*
+      dependencies: { '@waflow/contracts': '^1.0.0' },
     });
 
     const workspaces = [contracts.meta, events.meta];
@@ -366,7 +366,6 @@ describe('Architecture Test Engine — Boundary Enforcement', () => {
   });
 
   it('Scenario F: should detect source-level package cycles that attempt to bypass declared dependencies (ARCH-009)', () => {
-    // pkgA and pkgB have no declared dependencies in package.json, but their source files import each other
     const pkgA = createMockWorkspace('@waflow/ai', 'package', {
       dependencies: {},
       sourceImports: ['@waflow/integrations'],
@@ -385,7 +384,48 @@ describe('Architecture Test Engine — Boundary Enforcement', () => {
     const result = analyzeArchitecture({ workspaces, customFiles });
     expect(result.success).toBe(false);
 
-    // Both ARCH-013 (phantom dependencies) and ARCH-009 (cycle detection) must be reported
+    const cycleViolations = result.violations.filter((v) => v.ruleId === 'ARCH-009');
+    expect(cycleViolations.length).toBeGreaterThanOrEqual(1);
+    expect(cycleViolations[0]?.reason).toContain('Circular dependency detected');
+  });
+
+  // FINAL CLOSURE TESTS FOR OPTIONAL DEPENDENCY SEMANTICS & OPTIONAL CYCLE GRAPH
+
+  it('Scenario G: should allow production source to import workspace declared in optionalDependencies (VALID)', () => {
+    const contracts = createMockWorkspace('@waflow/contracts', 'package');
+    const events = createMockWorkspace('@waflow/events', 'package', {
+      optionalDependencies: { '@waflow/contracts': 'workspace:*' },
+      sourceImports: ['@waflow/contracts'],
+    });
+
+    const workspaces = [contracts.meta, events.meta];
+    const customFiles = new Map([
+      [contracts.meta.name, contracts.files],
+      [events.meta.name, events.files],
+    ]);
+
+    const result = analyzeArchitecture({ workspaces, customFiles });
+    expect(result.success).toBe(true);
+    expect(result.violations).toHaveLength(0);
+  });
+
+  it('Scenario H: should detect cycle involving an optionalDependencies edge (ARCH-009)', () => {
+    const pkgA = createMockWorkspace('@waflow/ai', 'package', {
+      dependencies: { '@waflow/integrations': 'workspace:*' },
+    });
+    const pkgB = createMockWorkspace('@waflow/integrations', 'package', {
+      optionalDependencies: { '@waflow/ai': 'workspace:*' },
+    });
+
+    const workspaces = [pkgA.meta, pkgB.meta];
+    const customFiles = new Map([
+      [pkgA.meta.name, pkgA.files],
+      [pkgB.meta.name, pkgB.files],
+    ]);
+
+    const result = analyzeArchitecture({ workspaces, customFiles });
+    expect(result.success).toBe(false);
+
     const cycleViolations = result.violations.filter((v) => v.ruleId === 'ARCH-009');
     expect(cycleViolations.length).toBeGreaterThanOrEqual(1);
     expect(cycleViolations[0]?.reason).toContain('Circular dependency detected');
