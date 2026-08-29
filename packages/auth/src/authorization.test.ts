@@ -56,6 +56,14 @@ describe('Identity, Membership & Authorization Foundation — Security Invariant
     status: 'ACTIVE',
   });
 
+  const activeBanaAdminMembership: OrganizationMembership = createOrganizationMembership({
+    membershipId: createMembershipId('mem_bana_admin_01'),
+    userId,
+    organizationId: banaOrgId,
+    role: 'ADMIN',
+    status: 'ACTIVE',
+  });
+
   const suspendedBanaMembership: OrganizationMembership = createOrganizationMembership({
     membershipId: createMembershipId('mem_bana_suspended'),
     userId,
@@ -83,7 +91,7 @@ describe('Identity, Membership & Authorization Foundation — Security Invariant
       expect(Object.isFrozen(authCtx)).toBe(true);
     });
 
-    it('Scenario H & P: should reject SUSPENDED membership even if role is OWNER', () => {
+    it('Scenario H, P & M: SUSPENDED OWNER with explicit permission grant remains DENIED', () => {
       expect(() => assertActiveMembership(suspendedBanaMembership)).toThrow(
         AuthorizationDeniedError,
       );
@@ -92,7 +100,7 @@ describe('Identity, Membership & Authorization Foundation — Security Invariant
         createAuthorizationContext({
           membership: suspendedBanaMembership,
           tenantContext: banaTenantContext,
-          permissions: [permOrdersCreate],
+          permissions: [permOrdersCreate, permOrdersRead],
         });
         expect.unreachable('Should have thrown AuthorizationDeniedError');
       } catch (err) {
@@ -102,7 +110,7 @@ describe('Identity, Membership & Authorization Foundation — Security Invariant
       }
     });
 
-    it('Scenario I & O: should reject membership when organization does not match TenantContext', () => {
+    it('Scenario I, O & N: Tenant-mismatched OWNER with explicit permission grant remains DENIED', () => {
       expect(() => assertMembershipMatchesTenant(activeBanaMembership, sofiaTenantContext)).toThrow(
         AuthorizationDeniedError,
       );
@@ -111,7 +119,7 @@ describe('Identity, Membership & Authorization Foundation — Security Invariant
         createAuthorizationContext({
           membership: activeBanaMembership,
           tenantContext: sofiaTenantContext,
-          permissions: [permOrdersCreate],
+          permissions: [permOrdersCreate, permOrdersRead],
         });
         expect.unreachable('Should have thrown AuthorizationDeniedError');
       } catch (err) {
@@ -175,6 +183,34 @@ describe('Identity, Membership & Authorization Foundation — Security Invariant
       }
     });
 
+    it('Scenario C: OWNER with zero grants is denied a permission', () => {
+      const ownerZeroGrantsCtx = createAuthorizationContext({
+        membership: activeBanaMembership,
+        tenantContext: banaTenantContext,
+        permissions: [],
+      });
+
+      expect(ownerZeroGrantsCtx.role).toBe('OWNER');
+      expect(hasPermission(ownerZeroGrantsCtx, permOrdersCreate)).toBe(false);
+      expect(() => assertPermission(ownerZeroGrantsCtx, permOrdersCreate)).toThrow(
+        AuthorizationDeniedError,
+      );
+    });
+
+    it('Scenario D: ADMIN with zero grants is denied a permission', () => {
+      const adminZeroGrantsCtx = createAuthorizationContext({
+        membership: activeBanaAdminMembership,
+        tenantContext: banaTenantContext,
+        permissions: [],
+      });
+
+      expect(adminZeroGrantsCtx.role).toBe('ADMIN');
+      expect(hasPermission(adminZeroGrantsCtx, permOrdersCreate)).toBe(false);
+      expect(() => assertPermission(adminZeroGrantsCtx, permOrdersCreate)).toThrow(
+        AuthorizationDeniedError,
+      );
+    });
+
     it('Scenario Q & R: dedicated AuthorizationDeniedError carries structured reason and metadata', () => {
       try {
         assertPermission(authCtx, permAnalyticsView);
@@ -197,7 +233,7 @@ describe('Identity, Membership & Authorization Foundation — Security Invariant
   });
 
   describe('Context Immutability & Organization Switching Security', () => {
-    it('Scenario U: authorization context permissions cannot be mutated via external reference', () => {
+    it('Scenario A: mutating the input permission collection after context creation does NOT modify context permissions', () => {
       const grantedPermissions = new Set([permOrdersCreate]);
 
       const authCtx = createAuthorizationContext({
@@ -209,11 +245,35 @@ describe('Identity, Membership & Authorization Foundation — Security Invariant
       expect(authCtx.permissions.has(permOrdersCreate)).toBe(true);
       expect(authCtx.permissions.has(permOrdersRead)).toBe(false);
 
-      // Attempt to mutate external array/set
+      // Attempt to mutate external Set
       grantedPermissions.add(permOrdersRead);
 
       // Invariant: AuthorizationContext permissions remain untouched
       expect(authCtx.permissions.has(permOrdersRead)).toBe(false);
+    });
+
+    it('Scenario B: consumers cannot mutate authoritative context grants through exposed collection', () => {
+      const authCtx = createAuthorizationContext({
+        membership: activeBanaMembership,
+        tenantContext: banaTenantContext,
+        permissions: [permOrdersCreate],
+      });
+
+      expect(Object.isFrozen(authCtx)).toBe(true);
+      expect(Object.isFrozen(authCtx.permissions)).toBe(true);
+
+      // Attempting to invoke mutator methods (add, delete, clear) fails
+      // @ts-expect-error Attempting mutation on readonly set wrapper
+      expect(authCtx.permissions.add).toBeUndefined();
+      // @ts-expect-error Attempting mutation on readonly set wrapper
+      expect(authCtx.permissions.delete).toBeUndefined();
+      // @ts-expect-error Attempting mutation on readonly set wrapper
+      expect(authCtx.permissions.clear).toBeUndefined();
+
+      // Read-only methods work perfectly
+      expect(authCtx.permissions.has(permOrdersCreate)).toBe(true);
+      expect(authCtx.permissions.size).toBe(1);
+      expect(Array.from(authCtx.permissions)).toEqual([permOrdersCreate]);
     });
 
     it('Scenario V & W: switching organizations requires a different Membership and cannot reuse permissions', () => {

@@ -116,3 +116,10 @@ When a user switches organizations in the UI (e.g., from _Bana Shop_ to _Sofia D
 WAFLOW domain and application logic remain completely independent of external authentication providers (e.g., Clerk, Auth0, Firebase Auth, Supabase, Cognito, Keycloak).
 
 External providers adapt their provider-specific tokens/claims into the canonical `UserId` at the gateway boundary. No provider SDKs or provider data types are permitted within `@waflow/domain` or `@waflow/auth`.
+
+---
+
+## 7. Membership & Permission Provenance Rule
+
+> [!IMPORTANT]
+> **Server-Authoritative Provenance:** `AuthorizationContext` must be constructed exclusively from trusted server-side identity, membership, and permission resolution. Client-provided roles, memberships, organizations, or permission grants are never authoritative simply because they are syntactically well-formed. Future API/auth adapters must resolve trusted canonical records from the backend before instantiating `AuthorizationContext`.

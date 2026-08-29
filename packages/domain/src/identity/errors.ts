@@ -33,3 +33,27 @@ export class InvalidPermissionError extends Error {
     Object.setPrototypeOf(this, new.target.prototype);
   }
 }
+
+/**
+ * Thrown when an unsupported organization role is provided.
+ */
+export class InvalidOrganizationRoleError extends Error {
+  override readonly name = 'InvalidOrganizationRoleError' as const;
+
+  constructor(message: string) {
+    super(message);
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+/**
+ * Thrown when an unsupported membership lifecycle status is provided.
+ */
+export class InvalidMembershipStatusError extends Error {
+  override readonly name = 'InvalidMembershipStatusError' as const;
+
+  constructor(message: string) {
+    super(message);
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}

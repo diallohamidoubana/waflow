@@ -9,15 +9,22 @@ declare const PermissionBrand: unique symbol;
  */
 export type Permission = string & { readonly [PermissionBrand]: true };
 
-const FORBIDDEN_PERMISSION_VALUES: ReadonlySet<string> = new Set([
-  '*',
-  'all',
-  'ALL',
-  'super',
-  'SUPER',
-  'admin.*',
-  '*.*',
-]);
+const FORBIDDEN_BYPASS_TOKENS: ReadonlySet<string> = new Set(['all', 'super', 'admin', 'root']);
+
+function isForbiddenPermission(trimmed: string): boolean {
+  // Reject any string containing wildcards ('*', ':*', etc.)
+  if (trimmed.includes('*')) {
+    return true;
+  }
+
+  // Reject case-insensitive global bypass tokens ('ALL', 'all', 'All', etc.)
+  const lower = trimmed.toLowerCase();
+  if (FORBIDDEN_BYPASS_TOKENS.has(lower)) {
+    return true;
+  }
+
+  return false;
+}
 
 /**
  * Creates and validates a strongly-typed Permission identifier.
@@ -37,9 +44,9 @@ export function createPermission(value: string): Permission {
     throw new InvalidPermissionError('Permission cannot be empty or whitespace-only.');
   }
 
-  if (FORBIDDEN_PERMISSION_VALUES.has(trimmed)) {
+  if (isForbiddenPermission(trimmed)) {
     throw new InvalidPermissionError(
-      `Permission "${trimmed}" is forbidden. Wildcards and global ALL bypass permissions are prohibited by security policy.`,
+      `Permission "${trimmed}" is forbidden. Wildcards ("*") and global ALL/super/admin bypass permissions are prohibited by security policy.`,
     );
   }
 
@@ -53,9 +60,9 @@ export function createPermission(value: string): Permission {
  * @returns True if value is a non-empty, non-wildcard trimmed string.
  */
 export function isPermission(value: unknown): value is Permission {
-  return (
-    typeof value === 'string' &&
-    value.trim().length > 0 &&
-    !FORBIDDEN_PERMISSION_VALUES.has(value.trim())
-  );
+  if (typeof value !== 'string') {
+    return false;
+  }
+  const trimmed = value.trim();
+  return trimmed.length > 0 && !isForbiddenPermission(trimmed);
 }

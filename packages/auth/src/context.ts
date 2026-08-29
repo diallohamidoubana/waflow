@@ -24,6 +24,43 @@ export interface AuthorizationContext {
 }
 
 /**
+ * Creates an immutable, defensively copied Set wrapper where mutating methods
+ * do not exist or cannot alter the internal private Set.
+ */
+function createImmutablePermissionSet(input: Iterable<Permission>): ReadonlySet<Permission> {
+  const internalSet = new Set<Permission>(input);
+
+  const readOnlyWrapper: ReadonlySet<Permission> = {
+    has(value: Permission): boolean {
+      return internalSet.has(value);
+    },
+    get size(): number {
+      return internalSet.size;
+    },
+    entries(): SetIterator<[Permission, Permission]> {
+      return internalSet.entries();
+    },
+    keys(): SetIterator<Permission> {
+      return internalSet.keys();
+    },
+    values(): SetIterator<Permission> {
+      return internalSet.values();
+    },
+    forEach(
+      callbackfn: (value: Permission, value2: Permission, set: ReadonlySet<Permission>) => void,
+      thisArg?: unknown,
+    ): void {
+      internalSet.forEach((val, val2) => callbackfn.call(thisArg, val, val2, readOnlyWrapper));
+    },
+    [Symbol.iterator](): SetIterator<Permission> {
+      return internalSet[Symbol.iterator]();
+    },
+  };
+
+  return Object.freeze(readOnlyWrapper);
+}
+
+/**
  * Creates an immutable AuthorizationContext for an active membership and tenant context.
  * Enforces deny-by-default invariants during context creation.
  *
@@ -68,13 +105,13 @@ export function createAuthorizationContext(params: {
   }
 
   // Security Invariant 3: Create defensive immutable copy of granted permissions
-  const permissionsCopy = new Set<Permission>(permissions);
+  const immutablePermissions = createImmutablePermissionSet(permissions);
 
   return Object.freeze({
     userId: membership.userId,
     membershipId: membership.membershipId,
     organizationId: tenantContext.organizationId,
     role: membership.role,
-    permissions: Object.freeze(permissionsCopy),
+    permissions: immutablePermissions,
   });
 }

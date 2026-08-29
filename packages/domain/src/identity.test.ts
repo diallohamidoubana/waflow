@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   InvalidMembershipIdError,
+  InvalidMembershipStatusError,
+  InvalidOrganizationRoleError,
   InvalidPermissionError,
   InvalidUserIdError,
   createMembershipId,
@@ -134,6 +136,62 @@ describe('Identity & Membership Foundation — Domain Primitives', () => {
       expect(membership.status).toBe('ACTIVE');
       expect(Object.isFrozen(membership)).toBe(true);
     });
+
+    it('Scenario K: should reject invalid runtime organization role with InvalidOrganizationRoleError', () => {
+      const userId = createUserId('usr_hamidou');
+      const orgId = createOrganizationId('org_bana_shop');
+      const memId = createMembershipId('mem_001');
+
+      expect(() =>
+        createOrganizationMembership({
+          membershipId: memId,
+          userId,
+          organizationId: orgId,
+          // @ts-expect-error Testing invalid runtime role
+          role: 'ROOT',
+          status: 'ACTIVE',
+        }),
+      ).toThrow(InvalidOrganizationRoleError);
+
+      expect(() =>
+        createOrganizationMembership({
+          membershipId: memId,
+          userId,
+          organizationId: orgId,
+          // @ts-expect-error Testing invalid runtime role
+          role: 'SUPER_ADMIN',
+          status: 'ACTIVE',
+        }),
+      ).toThrow(InvalidOrganizationRoleError);
+    });
+
+    it('Scenario L: should reject invalid runtime membership status with InvalidMembershipStatusError', () => {
+      const userId = createUserId('usr_hamidou');
+      const orgId = createOrganizationId('org_bana_shop');
+      const memId = createMembershipId('mem_001');
+
+      expect(() =>
+        createOrganizationMembership({
+          membershipId: memId,
+          userId,
+          organizationId: orgId,
+          role: 'OWNER',
+          // @ts-expect-error Testing invalid runtime status
+          status: 'DELETED',
+        }),
+      ).toThrow(InvalidMembershipStatusError);
+
+      expect(() =>
+        createOrganizationMembership({
+          membershipId: memId,
+          userId,
+          organizationId: orgId,
+          role: 'OWNER',
+          // @ts-expect-error Testing invalid runtime status
+          status: 'INVITED',
+        }),
+      ).toThrow(InvalidMembershipStatusError);
+    });
   });
 
   describe('Permission', () => {
@@ -148,14 +206,38 @@ describe('Identity & Membership Foundation — Domain Primitives', () => {
       expect(() => createPermission('   ')).toThrow(InvalidPermissionError);
     });
 
-    it('should reject wildcard and global ALL bypass permissions', () => {
+    it('Scenario E: should reject wildcard "*" permission', () => {
       expect(() => createPermission('*')).toThrow(InvalidPermissionError);
-      expect(() => createPermission('ALL')).toThrow(InvalidPermissionError);
-      expect(() => createPermission('all')).toThrow(InvalidPermissionError);
-      expect(() => createPermission('*.*')).toThrow(InvalidPermissionError);
-      expect(() => createPermission('admin.*')).toThrow(InvalidPermissionError);
       expect(isPermission('*')).toBe(false);
+    });
+
+    it('Scenario F: should reject wildcard prefix "orders.*"', () => {
+      expect(() => createPermission('orders.*')).toThrow(InvalidPermissionError);
+      expect(isPermission('orders.*')).toBe(false);
+    });
+
+    it('Scenario G: should reject wildcard suffix "*.read"', () => {
+      expect(() => createPermission('*.read')).toThrow(InvalidPermissionError);
+      expect(isPermission('*.read')).toBe(false);
+    });
+
+    it('Scenario H: should reject wildcard colon format "orders:*"', () => {
+      expect(() => createPermission('orders:*')).toThrow(InvalidPermissionError);
+      expect(isPermission('orders:*')).toBe(false);
+    });
+
+    it('Scenario I: should reject uppercase bypass "ALL"', () => {
+      expect(() => createPermission('ALL')).toThrow(InvalidPermissionError);
       expect(isPermission('ALL')).toBe(false);
+    });
+
+    it('Scenario J: should reject case-insensitive bypass tokens ("all", "All", "super", "admin")', () => {
+      expect(() => createPermission('all')).toThrow(InvalidPermissionError);
+      expect(() => createPermission('All')).toThrow(InvalidPermissionError);
+      expect(() => createPermission('super')).toThrow(InvalidPermissionError);
+      expect(() => createPermission('admin')).toThrow(InvalidPermissionError);
+      expect(isPermission('all')).toBe(false);
+      expect(isPermission('All')).toBe(false);
     });
   });
 });
