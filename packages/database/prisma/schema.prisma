@@ -1,0 +1,64 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum OrganizationRole {
+  OWNER
+  ADMIN
+  SALES_MANAGER
+  SALES_AGENT
+  SUPPORT_AGENT
+  OPERATIONS_MANAGER
+
+  @@map("organization_role")
+}
+
+enum MembershipStatus {
+  ACTIVE
+  SUSPENDED
+
+  @@map("membership_status")
+}
+
+model Organization {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  memberships OrganizationMembership[]
+
+  @@map("organizations")
+}
+
+model User {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  memberships OrganizationMembership[]
+
+  @@map("users")
+}
+
+model OrganizationMembership {
+  id             String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId         String           @map("user_id") @db.Uuid
+  organizationId String           @map("organization_id") @db.Uuid
+  role           OrganizationRole @map("role")
+  status         MembershipStatus @default(ACTIVE) @map("status")
+  createdAt      DateTime         @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt      DateTime         @updatedAt @map("updated_at") @db.Timestamptz
+
+  user         User         @relation(fields: [userId], references: [id], onDelete: Restrict)
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+
+  @@unique([userId, organizationId], name: "unique_user_organization_membership")
+  @@index([organizationId], name: "idx_organization_memberships_organization_id")
+  @@index([userId], name: "idx_organization_memberships_user_id")
+  @@map("organization_memberships")
+}

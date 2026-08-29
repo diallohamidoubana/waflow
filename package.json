@@ -11,6 +11,13 @@
   "scripts": {
     "build": "turbo run build",
     "clean": "turbo run clean && rimraf --glob .turbo **/dist",
+    "db:format": "pnpm --filter @waflow/database db:format",
+    "db:generate": "pnpm --filter @waflow/database db:generate",
+    "db:migrate:deploy": "pnpm --filter @waflow/database db:migrate:deploy",
+    "db:migrate:dev": "pnpm --filter @waflow/database db:migrate:dev",
+    "db:reset:local": "pnpm --filter @waflow/database db:reset:local",
+    "db:studio": "pnpm --filter @waflow/database db:studio",
+    "db:validate": "pnpm --filter @waflow/database db:validate",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "lint": "eslint .",
