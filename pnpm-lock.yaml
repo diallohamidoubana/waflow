@@ -55,7 +55,11 @@ importers:
 
   packages/analytics: {}
 
-  packages/auth: {}
+  packages/auth:
+    dependencies:
+      '@waflow/domain':
+        specifier: workspace:*
+        version: link:../domain
 
   packages/config: {}
 
