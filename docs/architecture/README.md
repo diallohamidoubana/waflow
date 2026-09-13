@@ -59,3 +59,4 @@ This design guarantees that databases, AI providers, message brokers, and third-
 - [Dependency Model](dependency-model.md) — Detailed package dependency matrix, allowlists, and boundaries (ARCH-001 to ARCH-014).
 - [Multi-Tenancy Architecture](multi-tenancy.md) — Organization tenant boundary, TenantContext, isolation invariants, and data classification.
 - [Identity, Membership & Authorization](identity-membership-authorization.md) — Decoupled security model, UserId, OrganizationMembership, Permission capabilities, and deny-by-default execution.
+- [Database & Persistence Architecture](database-persistence.md) — PostgreSQL datastore, Prisma persistence adapter, UUID identifiers, tenant-scoped queries, and migration discipline.

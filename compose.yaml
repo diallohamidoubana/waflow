@@ -1,0 +1,22 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: waflow-postgres-dev
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-waflow_dev}
+      POSTGRES_USER: ${POSTGRES_USER:-waflow}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-waflow_dev_password}
+    ports:
+      - '127.0.0.1:${POSTGRES_PORT:-5432}:5432'
+    volumes:
+      - postgres_dev_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-waflow} -d ${POSTGRES_DB:-waflow_dev}']
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres_dev_data:
+    name: waflow_postgres_dev_data
