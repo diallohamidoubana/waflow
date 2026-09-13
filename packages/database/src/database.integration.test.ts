@@ -1,5 +1,18 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { createTenantContext, isMembershipId, isOrganizationId, isUserId } from '@waflow/domain';
+import {
+  createTenantContext,
+  isMembershipId,
+  isMembershipStatus,
+  isOrganizationId,
+  isOrganizationRole,
+  isUserId,
+  InvalidMembershipStatusError,
+  InvalidOrganizationRoleError,
+  MEMBERSHIP_STATUSES,
+  ORGANIZATION_ROLES,
+  type OrganizationRole,
+  type MembershipStatus,
+} from '@waflow/domain';
 import {
   checkDatabaseHealth,
   createMembershipRepository,
@@ -210,5 +223,149 @@ describe('Database & Persistence Foundation — Real PostgreSQL Integration', ()
     expect(duplicateErr.organizationId).toBe('org_456');
     expect(duplicateErr.message).toContain('Membership already exists');
     expect(duplicateErr.cause).toBeDefined();
+  });
+
+  it('Scenario 7: Domain ↔️ Persistence Enum Parity — persists and maps all canonical roles and statuses', async () => {
+    if (!isDatabaseAvailable) return;
+
+    const org = await orgRepo.create();
+    const tenantCtx = createTenantContext(org.id);
+
+    // Test persistence round-trip for EVERY canonical OrganizationRole
+    for (const role of ORGANIZATION_ROLES) {
+      const user = await userRepo.create();
+      const created = await membershipRepo.createMembership(tenantCtx, {
+        userId: user.id,
+        role,
+        status: 'ACTIVE',
+      });
+
+      const fetched = await membershipRepo.findMembershipById(tenantCtx, created.membershipId);
+      expect(fetched).not.toBeNull();
+      expect(fetched?.role).toBe(role);
+      expect(isOrganizationRole(fetched?.role)).toBe(true);
+    }
+
+    // Test persistence round-trip for EVERY canonical MembershipStatus
+    for (const status of MEMBERSHIP_STATUSES) {
+      const user = await userRepo.create();
+      const created = await membershipRepo.createMembership(tenantCtx, {
+        userId: user.id,
+        role: 'SALES_AGENT',
+        status,
+      });
+
+      const fetched = await membershipRepo.findMembershipById(tenantCtx, created.membershipId);
+      expect(fetched).not.toBeNull();
+      expect(fetched?.status).toBe(status);
+      expect(isMembershipStatus(fetched?.status)).toBe(true);
+    }
+  });
+
+  it('Scenario 8: OPERATIONS_MANAGER Round-Trip — verifies faithful persistence and factory mapping', async () => {
+    if (!isDatabaseAvailable) return;
+
+    const org = await orgRepo.create();
+    const user = await userRepo.create();
+    const tenantCtx = createTenantContext(org.id);
+
+    const created = await membershipRepo.createMembership(tenantCtx, {
+      userId: user.id,
+      role: 'OPERATIONS_MANAGER',
+      status: 'ACTIVE',
+    });
+
+    const fetched = await membershipRepo.findMembershipById(tenantCtx, created.membershipId);
+    expect(fetched).not.toBeNull();
+    expect(fetched?.role).toBe('OPERATIONS_MANAGER');
+    expect(fetched?.status).toBe('ACTIVE');
+    expect(fetched?.organizationId).toBe(org.id);
+    expect(fetched?.userId).toBe(user.id);
+  });
+
+  it('Scenario 9: SUSPENDED Round-Trip — verifies faithful persistence and factory mapping', async () => {
+    if (!isDatabaseAvailable) return;
+
+    const org = await orgRepo.create();
+    const user = await userRepo.create();
+    const tenantCtx = createTenantContext(org.id);
+
+    const created = await membershipRepo.createMembership(tenantCtx, {
+      userId: user.id,
+      role: 'ADMIN',
+      status: 'SUSPENDED',
+    });
+
+    const fetched = await membershipRepo.findMembershipById(tenantCtx, created.membershipId);
+    expect(fetched).not.toBeNull();
+    expect(fetched?.status).toBe('SUSPENDED');
+    expect(fetched?.role).toBe('ADMIN');
+  });
+
+  it('Scenario 10: Invalid Persistence Lifecycle States — rejects non-canonical values at mapper boundary', () => {
+    const invalidStatusRecord = {
+      id: 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11',
+      userId: 'b1eebc99-9c0b-4ef8-bb6d-6bb9bd380a22',
+      organizationId: 'c2eebc99-9c0b-4ef8-bb6d-6bb9bd380a33',
+      role: 'ADMIN' as OrganizationRole,
+      status: 'INVITED' as unknown as MembershipStatus,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+
+    expect(() => mapDatabaseMembership(invalidStatusRecord)).toThrow(InvalidMembershipStatusError);
+
+    const revokedStatusRecord = {
+      ...invalidStatusRecord,
+      status: 'REVOKED' as unknown as MembershipStatus,
+    };
+    expect(() => mapDatabaseMembership(revokedStatusRecord)).toThrow(InvalidMembershipStatusError);
+
+    const invalidRoleRecord = {
+      ...invalidStatusRecord,
+      status: 'ACTIVE' as MembershipStatus,
+      role: 'SUPER_ADMIN' as unknown as OrganizationRole,
+    };
+    expect(() => mapDatabaseMembership(invalidRoleRecord)).toThrow(InvalidOrganizationRoleError);
+
+    // Confirm type guards reject deferred/invalid lifecycle states
+    expect(isMembershipStatus('INVITED')).toBe(false);
+    expect(isMembershipStatus('REVOKED')).toBe(false);
+    expect(isOrganizationRole('SUPER_ADMIN')).toBe(false);
+  });
+
+  it('Scenario 11: Public MembershipRepository Tenant Isolation — listMemberships scopes strictly by tenant', async () => {
+    if (!isDatabaseAvailable) return;
+
+    const orgA = await orgRepo.create();
+    const orgB = await orgRepo.create();
+    const userA1 = await userRepo.create();
+    const userA2 = await userRepo.create();
+    const userB1 = await userRepo.create();
+
+    const tenantCtxA = createTenantContext(orgA.id);
+    const tenantCtxB = createTenantContext(orgB.id);
+
+    await membershipRepo.createMembership(tenantCtxA, {
+      userId: userA1.id,
+      role: 'OWNER',
+    });
+    await membershipRepo.createMembership(tenantCtxA, {
+      userId: userA2.id,
+      role: 'SALES_AGENT',
+    });
+    await membershipRepo.createMembership(tenantCtxB, {
+      userId: userB1.id,
+      role: 'OPERATIONS_MANAGER',
+    });
+
+    const membershipsA = await membershipRepo.listMemberships(tenantCtxA);
+    const membershipsB = await membershipRepo.listMemberships(tenantCtxB);
+
+    expect(membershipsA.length).toBe(2);
+    expect(membershipsA.every((m) => m.organizationId === orgA.id)).toBe(true);
+
+    expect(membershipsB.length).toBe(1);
+    expect(membershipsB.every((m) => m.organizationId === orgB.id)).toBe(true);
   });
 });
